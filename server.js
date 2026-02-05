@@ -226,6 +226,10 @@ const toSnakeCase = (obj) => {
 // ==================== ROUTES ====================
 
 // Health check
+app.get('/', (req, res) => {
+    res.json({ status: 'OK', message: 'Backend is running' });
+});
+
 app.get('/api/health', (req, res) => {
     res.json({ status: 'OK', message: 'Backend is running' });
 });
