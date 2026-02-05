@@ -122,9 +122,18 @@ app.use(express.json({ limit: '50mb' })); // Increase limit for large payloads
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Supabase client
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_ANON_KEY;
+
+if (!supabaseUrl || !supabaseKey) {
+    console.error('❌ Missing Supabase Environment Variables!');
+    console.error('SUPABASE_URL:', supabaseUrl ? 'Set' : 'MISSING');
+    console.error('SUPABASE_ANON_KEY:', supabaseKey ? 'Set' : 'MISSING');
+}
+
 const supabase = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_ANON_KEY
+    supabaseUrl || '',
+    supabaseKey || ''
 );
 
 // Nodemailer configuration for password reset emails
