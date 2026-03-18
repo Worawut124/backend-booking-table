@@ -1397,6 +1397,102 @@ app.delete('/api/carousel/:id', async (req, res) => {
     }
 });
 
+// ==================== PROMOTIONS ====================
+
+// Get all active promotions
+app.get('/api/promotions', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('promotions')
+            .select('*')
+            .eq('is_active', true)
+            .order('display_order', { ascending: true });
+
+        if (error) throw error;
+
+        res.json(toCamelCase(data));
+    } catch (error) {
+        console.error('Get promotions error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get all promotions (for admin)
+app.get('/api/promotions/all', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('promotions')
+            .select('*')
+            .order('display_order', { ascending: true });
+
+        if (error) throw error;
+
+        res.json(toCamelCase(data));
+    } catch (error) {
+        console.error('Get all promotions error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Create promotion
+app.post('/api/promotions', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const promoData = toSnakeCase(req.body);
+
+        const { data, error } = await supabase
+            .from('promotions')
+            .insert([promoData])
+            .select()
+            .single();
+
+        if (error) throw error;
+
+        res.json(toCamelCase(data));
+    } catch (error) {
+        console.error('Create promotion error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Update promotion
+app.put('/api/promotions/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const promoData = toSnakeCase(req.body);
+        promoData.updated_at = new Date().toISOString();
+
+        const { data, error } = await supabase
+            .from('promotions')
+            .update(promoData)
+            .eq('id', req.params.id)
+            .select()
+            .single();
+
+        if (error) throw error;
+
+        res.json(toCamelCase(data));
+    } catch (error) {
+        console.error('Update promotion error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Delete promotion
+app.delete('/api/promotions/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { error } = await supabase
+            .from('promotions')
+            .delete()
+            .eq('id', req.params.id);
+
+        if (error) throw error;
+
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Delete promotion error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // ==================== START SERVER ====================
 
 app.listen(PORT, () => {
