@@ -30,7 +30,11 @@ const generalLimiter = rateLimit({
 });
 
 // JWT Configuration
-const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    console.error('❌ CRITICAL: JWT_SECRET is not set! Server cannot start securely.');
+    process.exit(1);
+}
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 const BCRYPT_SALT_ROUNDS = 12;
 
@@ -268,7 +272,7 @@ app.get('/api/health', (req, res) => {
 // ==================== AUTH ====================
 
 // Register
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', authLimiter, async (req, res) => {
     try {
         const { email, password, name, phone } = req.body;
 
@@ -414,6 +418,12 @@ app.post('/api/auth/verify', async (req, res) => {
 app.put('/api/auth/profile/:userId', authenticateToken, async (req, res) => {
     try {
         const { userId } = req.params;
+
+        // SECURITY: ตรวจสอบว่า user แก้ไขโปรไฟล์ตัวเองเท่านั้น
+        if (String(req.user.userId) !== String(userId)) {
+            return res.status(403).json({ success: false, message: 'ไม่สามารถแก้ไขโปรไฟล์ของผู้ใช้อื่นได้' });
+        }
+
         const updates = req.body;
 
         // Remove sensitive fields
@@ -441,68 +451,8 @@ app.put('/api/auth/profile/:userId', authenticateToken, async (req, res) => {
     }
 });
 
-// Change password
-app.put('/api/auth/change-password/:userId', async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const { currentPassword, newPassword } = req.body;
-
-        // Validate input
-        if (!currentPassword || !newPassword) {
-            return res.status(400).json({
-                success: false,
-                message: 'กรุณากรอกรหัสผ่านปัจจุบันและรหัสผ่านใหม่'
-            });
-        }
-
-        if (newPassword.length < 6) {
-            return res.status(400).json({
-                success: false,
-                message: 'รหัสผ่านใหม่ต้องมีอย่างน้อย 6 ตัวอักษร'
-            });
-        }
-
-        // Get current user
-        const { data: userData, error: userError } = await supabase
-            .from('users')
-            .select('*')
-            .eq('id', userId)
-            .single();
-
-        if (userError || !userData) {
-            return res.status(404).json({
-                success: false,
-                message: 'ไม่พบผู้ใช้'
-            });
-        }
-
-        // Verify current password
-        const isValidPassword = await bcrypt.compare(currentPassword, userData.password);
-
-        if (!isValidPassword) {
-            return res.status(401).json({
-                success: false,
-                message: 'รหัสผ่านปัจจุบันไม่ถูกต้อง'
-            });
-        }
-
-        // Hash new password
-        const hashedNewPassword = await bcrypt.hash(newPassword, BCRYPT_SALT_ROUNDS);
-
-        // Update password
-        const { error: updateError } = await supabase
-            .from('users')
-            .update({ password: hashedNewPassword })
-            .eq('id', userId);
-
-        if (updateError) throw updateError;
-
-        res.json({ success: true, message: 'เปลี่ยนรหัสผ่านสำเร็จ' });
-    } catch (error) {
-        console.error('Change password error:', error);
-        res.status(500).json({ success: false, message: error.message });
-    }
-});
+// [REMOVED] Duplicate unauthenticated PUT /api/auth/change-password/:userId — SECURITY FIX
+// Use POST /api/auth/change-password (with authenticateToken) instead.
 
 // Refresh token
 app.post('/api/auth/refresh', async (req, res) => {
@@ -676,7 +626,9 @@ app.post('/api/auth/reset-password', async (req, res) => {
 // Change password (for logged-in users)
 app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
     try {
-        const { userId, currentPassword, newPassword } = req.body;
+        // SECURITY FIX: Use userId from JWT token, not from request body
+        const userId = req.user.userId;
+        const { currentPassword, newPassword } = req.body;
 
         if (!currentPassword || !newPassword) {
             return res.status(400).json({
@@ -976,8 +928,32 @@ app.delete('/api/concerts/:id', authenticateToken, requireAdmin, async (req, res
 
 // ==================== BOOKINGS ====================
 
-// Get bookings by concert
+// Get bookings by concert (PUBLIC - ส่งเฉพาะ tableId + status เท่านั้น ไม่ส่งข้อมูลส่วนตัว)
 app.get('/api/bookings/concert/:concertId', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('bookings')
+            .select('id, concert_id, table_id, status, notes, created_at')
+            .eq('concert_id', req.params.concertId)
+            .order('created_at', { ascending: false });
+
+        if (error) throw error;
+
+        // ซ่อนข้อมูลส่วนตัวออกจาก notes (เช่น birthday info)
+        const safeData = data.map(b => ({
+            ...b,
+            notes: b.notes?.startsWith('[LOCKED]') ? '[LOCKED]' : (b.notes?.includes('[BDAY:') ? '[BDAY]' : undefined)
+        }));
+
+        res.json(toCamelCase(safeData));
+    } catch (error) {
+        console.error('Get bookings error:', error);
+        res.status(500).json({ error: 'เกิดข้อผิดพลาดภายในระบบ' });
+    }
+});
+
+// Get bookings by concert (ADMIN - ส่งข้อมูลเต็มรวมข้อมูลลูกค้า)
+app.get('/api/bookings/concert/:concertId/admin', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const { data, error } = await supabase
             .from('bookings')
@@ -989,13 +965,13 @@ app.get('/api/bookings/concert/:concertId', async (req, res) => {
 
         res.json(toCamelCase(data));
     } catch (error) {
-        console.error('Get bookings error:', error);
-        res.status(500).json({ error: error.message });
+        console.error('Get bookings (admin) error:', error);
+        res.status(500).json({ error: 'เกิดข้อผิดพลาดภายในระบบ' });
     }
 });
 
-// Get bookings by phone
-app.get('/api/bookings/phone/:phone', async (req, res) => {
+// Get bookings by phone (ต้อง login — ป้องกันดูข้อมูลคนอื่น)
+app.get('/api/bookings/phone/:phone', authenticateToken, async (req, res) => {
     try {
         const { data, error } = await supabase
             .from('bookings')
@@ -1008,14 +984,33 @@ app.get('/api/bookings/phone/:phone', async (req, res) => {
         res.json(toCamelCase(data));
     } catch (error) {
         console.error('Get bookings error:', error);
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ error: 'เกิดข้อผิดพลาดภายในระบบ' });
     }
 });
 
-// Create booking
-app.post('/api/bookings', async (req, res) => {
+// Create booking (ต้อง login ก่อนจอง)
+app.post('/api/bookings', authenticateToken, async (req, res) => {
     try {
         const bookingData = toSnakeCase(req.body);
+
+        // ===== RACE CONDITION PROTECTION =====
+        // ตรวจสอบว่าโต๊ะนี้ยังไม่ถูกจองในคอนเสิร์ตนี้ (สถานะ pending หรือ confirmed)
+        const { data: existingBooking } = await supabase
+            .from('bookings')
+            .select('id')
+            .eq('concert_id', bookingData.concert_id)
+            .eq('table_id', bookingData.table_id)
+            .in('status', ['pending', 'confirmed'])
+            .maybeSingle();
+
+        if (existingBooking) {
+            return res.status(409).json({
+                success: false,
+                error: 'TABLE_ALREADY_BOOKED',
+                message: 'โต๊ะนี้ถูกจองไปแล้ว กรุณาเลือกโต๊ะอื่น'
+            });
+        }
+        // ===== END PROTECTION =====
 
         const { data, error } = await supabase
             .from('bookings')
@@ -1023,7 +1018,17 @@ app.post('/api/bookings', async (req, res) => {
             .select()
             .single();
 
-        if (error) throw error;
+        if (error) {
+            // Unique constraint violation (race condition fallback จาก index ที่สร้างใน Phase 1)
+            if (error.code === '23505') {
+                return res.status(409).json({
+                    success: false,
+                    error: 'TABLE_ALREADY_BOOKED',
+                    message: 'โต๊ะนี้ถูกจองไปแล้ว กรุณาเลือกโต๊ะอื่น'
+                });
+            }
+            throw error;
+        }
 
         res.json(toCamelCase(data));
     } catch (error) {
@@ -1210,7 +1215,7 @@ app.put('/api/settings/:id', authenticateToken, requireAdmin, async (req, res) =
 // ==================== FILE UPLOAD ====================
 
 // Generic upload endpoint for all file types
-app.post('/api/upload/:bucket', upload.single('file'), async (req, res) => {
+app.post('/api/upload/:bucket', authenticateToken, upload.single('file'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: 'No file uploaded' });
@@ -1277,8 +1282,8 @@ app.post('/api/upload/:bucket', upload.single('file'), async (req, res) => {
     }
 });
 
-// Legacy endpoint for backward compatibility
-app.post('/api/upload', upload.single('file'), async (req, res) => {
+// Legacy endpoint for backward compatibility — also requires auth
+app.post('/api/upload', authenticateToken, upload.single('file'), async (req, res) => {
     req.params = { bucket: 'carousel-images' };
     return app._router.handle(req, res);
 });
@@ -1303,8 +1308,8 @@ app.get('/api/carousel', async (req, res) => {
     }
 });
 
-// Get all carousel slides (for admin)
-app.get('/api/carousel/all', async (req, res) => {
+// Get all carousel slides (for admin — requires auth)
+app.get('/api/carousel/all', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const { data, error } = await supabase
             .from('carousel_slides')
@@ -1339,7 +1344,7 @@ app.get('/api/carousel/:id', async (req, res) => {
 });
 
 // Create carousel slide
-app.post('/api/carousel', async (req, res) => {
+app.post('/api/carousel', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const slideData = toSnakeCase(req.body);
 
@@ -1359,7 +1364,7 @@ app.post('/api/carousel', async (req, res) => {
 });
 
 // Update carousel slide
-app.put('/api/carousel/:id', async (req, res) => {
+app.put('/api/carousel/:id', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const slideData = toSnakeCase(req.body);
         slideData.updated_at = new Date().toISOString();
@@ -1381,7 +1386,7 @@ app.put('/api/carousel/:id', async (req, res) => {
 });
 
 // Delete carousel slide
-app.delete('/api/carousel/:id', async (req, res) => {
+app.delete('/api/carousel/:id', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const { error } = await supabase
             .from('carousel_slides')
