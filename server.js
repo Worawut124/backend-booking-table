@@ -120,7 +120,8 @@ app.use(helmet({
 const allowedOrigins = [
     'http://localhost:3000',
     'http://localhost:3001',
-    'https://tables-booking.vercel.app'
+    'https://tables-booking.vercel.app',
+    'https://tables-booking-1.vercel.app'
 ];
 
 if (process.env.FRONTEND_URL) {
