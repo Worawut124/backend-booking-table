@@ -869,9 +869,19 @@ app.get('/api/concerts/:id', async (req, res) => {
 });
 
 // Create concert
-app.post('/api/concerts', authenticateToken, requireAdmin, async (req, res) => {
+// Regular type concerts can be created by any authenticated user (for daily bookings)
+// Other types (concert, special) require admin access
+app.post('/api/concerts', authenticateToken, async (req, res) => {
     try {
         const concertData = toSnakeCase(req.body);
+
+        // If NOT a regular-day booking, require admin role
+        if (concertData.type !== 'regular') {
+            const adminRoles = ['admin', 'owner'];
+            if (!adminRoles.includes(req.user.role)) {
+                return res.status(403).json({ success: false, message: 'Admin access required' });
+            }
+        }
 
         const { data, error } = await supabase
             .from('concerts')
